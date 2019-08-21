@@ -419,7 +419,7 @@ class KnotCollector(object):
         ctl.set_timeout(self._ttl)
 
         # Get global metrics.
-        ctl.send_block(cmd="stats", flags="F")
+        ctl.send_block(cmd="stats", flags="")
         global_stats = ctl.receive_stats()
 
         for section, section_data in global_stats.items():
@@ -428,7 +428,7 @@ class KnotCollector(object):
                 yield GaugeMetricFamily(name, '', value=item_data)
 
         # Get zone metrics.
-        ctl.send_block(cmd="zone-stats", flags="F")
+        ctl.send_block(cmd="zone-stats", flags="")
         zone_stats = ctl.receive_stats()
 
         if "zone" in zone_stats:
@@ -436,9 +436,6 @@ class KnotCollector(object):
                 for section, section_data in zone_data.items():
                     for item, item_data in section_data.items():
                         for kind, kind_data in item_data.items():
-                            if kind_data == 0:
-                                continue
-
                             name = ('knot_' + item).replace('-', '_')
                             m = GaugeMetricFamily(name, '',
                                     labels=['zone', 'section', 'type'])
