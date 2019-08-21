@@ -424,8 +424,18 @@ class KnotCollector(object):
 
         for section, section_data in global_stats.items():
             for item, item_data in section_data.items():
-                name = ('knot_' + section + '_' + item).replace('-', '_')
-                yield GaugeMetricFamily(name, '', value=item_data)
+                name = ('knot_' + item).replace('-', '_')
+                try:
+                    for kind, kind_data in item_data.items():
+                        m = GaugeMetricFamily(name, '',
+                                labels=['section', 'type'])
+                        m.add_metric([section, kind], kind_data)
+                        yield m
+                except AttributeError:
+                    m = GaugeMetricFamily(name, '',
+                            labels=['section'])
+                    m.add_metric([section], item_data)
+                    yield m
 
         # Get zone metrics.
         ctl.send_block(cmd="zone-stats", flags="")
@@ -435,11 +445,17 @@ class KnotCollector(object):
             for zone, zone_data in zone_stats["zone"].items():
                 for section, section_data in zone_data.items():
                     for item, item_data in section_data.items():
-                        for kind, kind_data in item_data.items():
-                            name = ('knot_' + item).replace('-', '_')
+                        name = ('knot_' + item).replace('-', '_')
+                        try:
+                            for kind, kind_data in item_data.items():
+                                m = GaugeMetricFamily(name, '',
+                                        labels=['zone', 'section', 'type'])
+                                m.add_metric([zone, section, kind], kind_data)
+                                yield m
+                        except AttributeError:
                             m = GaugeMetricFamily(name, '',
-                                    labels=['zone', 'section', 'type'])
-                            m.add_metric([zone, section, kind], kind_data)
+                                    labels=['zone', 'section'])
+                            m.add_metric([zone, section], item_data)
                             yield m
 
 if __name__ == '__main__':
