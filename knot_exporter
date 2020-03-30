@@ -2,7 +2,9 @@
 
 from ctypes import cdll, c_void_p, c_int, c_char_p, c_uint, byref
 from enum import IntEnum
+from subprocess import check_output
 
+import psutil
 import argparse
 import http.server
 
@@ -407,6 +409,16 @@ class KnotCtl(object):
 
         return out
 
+def memory_usage():
+    out = dict()
+    pids = check_output(['pidof', 'knotd']).split(b'\n')
+    for pid in pids:
+        if not pid:
+            continue
+        key = int(pid)
+        out[key] = psutil.Process(key).memory_info()._asdict()['rss']
+    return out
+
 class KnotCollector(object):
     def __init__(self, lib, sock, ttl):
         self._lib = lib
@@ -419,6 +431,11 @@ class KnotCollector(object):
         ctl.set_timeout(self._ttl)
 
         # Get global metrics.
+        for pid, usage in memory_usage().items():
+            m = GaugeMetricFamily('knot_memory_usage', '', labels=['section', 'type', 'pid'])
+            m.add_metric(['resources', 'memory', str(pid)], usage)
+            yield m
+
         ctl.send_block(cmd="stats", flags="")
         global_stats = ctl.receive_stats()
 
