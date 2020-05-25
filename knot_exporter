@@ -4,9 +4,10 @@ from ctypes import cdll, c_void_p, c_int, c_char_p, c_uint, byref
 from enum import IntEnum
 from subprocess import check_output
 
-import psutil
 import argparse
 import http.server
+import psutil
+import re
 
 from libknot.control import *
 
@@ -29,6 +30,26 @@ class KnotCollector(object):
         load_lib(lib)
         self._sock = sock
         self._ttl = ttl
+
+    def convert_state_time(time):
+
+        if time == "pending" or time == "running":
+            return 0
+        elif time == "not scheduled":
+            return None
+        else:
+            match = re.match("([+-])((\d+)D)?((\d+)h)?((\d+)m)?((\d+)s)?", time)
+            seconds = -1 if match.group(1) == '-' else 1
+            if match.group(3):
+                seconds = seconds + 86400 * int(match.group(3))
+            if match.group(5):
+                seconds = seconds + 3600 * int(match.group(5))
+            if match.group(7):
+                seconds = seconds + 60 * int(match.group(7))
+            if match.group(9):
+                seconds = seconds + int(match.group(9))
+
+        return seconds
 
     def collect(self):
         ctl = KnotCtl()
@@ -79,6 +100,46 @@ class KnotCollector(object):
                                     labels=['zone', 'section'])
                             m.add_metric([zone, section], item_data)
                             yield m
+
+        # zone state metrics
+        ctl.send_block(cmd="zone-status")
+        zone_states = ctl.receive_block()
+
+        for zone, info in zone_states.items():
+
+            metrics = ['expiration', 'refresh']
+
+            for metric in metrics:
+
+                seconds = KnotCollector.convert_state_time(info[metric])
+                if seconds == None:
+                    continue
+
+                m = GaugeMetricFamily('knot_zone_stats_' + metric, '', labels=['zone'])
+                m.add_metric([zone], seconds)
+
+                yield m
+
+        # zone configuration metrics
+        ctl.send_block(cmd="zone-read", rtype="SOA")
+        zones = ctl.receive_block()
+
+        for name, params in zones.items():
+
+            metrics = [
+                {"name": "knot_zone_refresh",    "index": 3},
+                {"name": "knot_zone_retry",      "index": 4},
+                {"name": "knot_zone_expiration", "index": 5},
+            ]
+
+            zone_config = params[name]['SOA']['data'][0].split(" ")
+
+            for metric in metrics:
+
+                m = GaugeMetricFamily(metric['name'], '', labels=['zone'])
+                m.add_metric([name], int(zone_config[metric['index']]))
+
+                yield m
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
