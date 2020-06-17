@@ -17,7 +17,7 @@ from prometheus_client.exposition import MetricsHandler
 
 def memory_usage():
     out = dict()
-    pids = check_output(['pidof', 'knotd']).split(b'\n')
+    pids = check_output(['pidof', 'knotd']).split(b' ')
     for pid in pids:
         if not pid:
             continue
@@ -26,10 +26,20 @@ def memory_usage():
     return out
 
 class KnotCollector(object):
-    def __init__(self, lib, sock, ttl):
+    def __init__(self, lib, sock, ttl,
+            collect_meminfo : bool,
+            collect_stats : bool,
+            collect_zone_stats : bool,
+            collect_zone_status : bool,
+            collect_zone_read : bool,):
         load_lib(lib)
         self._sock = sock
         self._ttl = ttl
+        self.collect_meminfo = collect_meminfo
+        self.collect_stats = collect_stats
+        self.collect_zone_stats = collect_zone_stats
+        self.collect_zone_status = collect_zone_status
+        self.collect_zone_read = collect_zone_read
 
     def convert_state_time(time):
 
@@ -56,90 +66,91 @@ class KnotCollector(object):
         ctl.connect(self._sock)
         ctl.set_timeout(self._ttl)
 
-        # Get global metrics.
-        for pid, usage in memory_usage().items():
-            m = GaugeMetricFamily('knot_memory_usage', '', labels=['section', 'type'])
-            m.add_metric(['server', str(pid)], usage)
-            yield m
+        if self.collect_meminfo:
+            # Get global metrics.
+            for pid, usage in memory_usage().items():
+                m = GaugeMetricFamily('knot_memory_usage', '', labels=['section', 'type'])
+                m.add_metric(['server', str(pid)], usage)
+                yield m
 
-        ctl.send_block(cmd="stats", flags="")
-        global_stats = ctl.receive_stats()
+        if self.collect_stats:
+            ctl.send_block(cmd="stats", flags="")
+            global_stats = ctl.receive_stats()
 
-        for section, section_data in global_stats.items():
-            for item, item_data in section_data.items():
-                name = ('knot_' + item).replace('-', '_')
-                try:
-                    for kind, kind_data in item_data.items():
+            for section, section_data in global_stats.items():
+                for item, item_data in section_data.items():
+                    name = ('knot_' + item).replace('-', '_')
+                    try:
+                        for kind, kind_data in item_data.items():
+                            m = GaugeMetricFamily(name, '',
+                                    labels=['section', 'type'])
+                            m.add_metric([section, kind], kind_data)
+                            yield m
+                    except AttributeError:
                         m = GaugeMetricFamily(name, '',
-                                labels=['section', 'type'])
-                        m.add_metric([section, kind], kind_data)
+                                labels=['section'])
+                        m.add_metric([section], item_data)
                         yield m
-                except AttributeError:
-                    m = GaugeMetricFamily(name, '',
-                            labels=['section'])
-                    m.add_metric([section], item_data)
+
+        if self.collect_zone_stats:
+            # Get zone metrics.
+            ctl.send_block(cmd="zone-stats", flags="")
+            zone_stats = ctl.receive_stats()
+
+            if "zone" in zone_stats:
+                for zone, zone_data in zone_stats["zone"].items():
+                    for section, section_data in zone_data.items():
+                        for item, item_data in section_data.items():
+                            name = ('knot_' + item).replace('-', '_')
+                            try:
+                                for kind, kind_data in item_data.items():
+                                    m = GaugeMetricFamily(name, '',
+                                        labels=['zone', 'section', 'type'])
+                                    m.add_metric([zone, section, kind], kind_data)
+                                    yield m
+                            except AttributeError:
+                                m = GaugeMetricFamily(name, '',
+                                        labels=['zone', 'section'])
+                                m.add_metric([zone, section], item_data)
+                                yield m
+
+        if self.collect_zone_status:
+            # zone state metrics
+            ctl.send_block(cmd="zone-status")
+            zone_states = ctl.receive_block()
+
+            for zone, info in zone_states.items():
+                metrics = ['expiration', 'refresh']
+                
+                for metric in metrics:
+                    seconds = KnotCollector.convert_state_time(info[metric])
+                    if seconds == None:
+                        continue
+
+                    m = GaugeMetricFamily('knot_zone_stats_' + metric, '', labels=['zone'])
+                    m.add_metric([zone], seconds)
+
                     yield m
 
-        # Get zone metrics.
-        ctl.send_block(cmd="zone-stats", flags="")
-        zone_stats = ctl.receive_stats()
+        if self.collect_zone_read:
+            # zone configuration metrics
+            ctl.send_block(cmd="zone-read", rtype="SOA")
+            zones = ctl.receive_block()
 
-        if "zone" in zone_stats:
-            for zone, zone_data in zone_stats["zone"].items():
-                for section, section_data in zone_data.items():
-                    for item, item_data in section_data.items():
-                        name = ('knot_' + item).replace('-', '_')
-                        try:
-                            for kind, kind_data in item_data.items():
-                                m = GaugeMetricFamily(name, '',
-                                        labels=['zone', 'section', 'type'])
-                                m.add_metric([zone, section, kind], kind_data)
-                                yield m
-                        except AttributeError:
-                            m = GaugeMetricFamily(name, '',
-                                    labels=['zone', 'section'])
-                            m.add_metric([zone, section], item_data)
-                            yield m
+            for name, params in zones.items():
+                metrics = [
+                    {"name": "knot_zone_refresh",    "index": 3},
+                    {"name": "knot_zone_retry",      "index": 4},
+                    {"name": "knot_zone_expiration", "index": 5},
+                ]
 
-        # zone state metrics
-        ctl.send_block(cmd="zone-status")
-        zone_states = ctl.receive_block()
+                zone_config = params[name]['SOA']['data'][0].split(" ")
 
-        for zone, info in zone_states.items():
+                for metric in metrics:
+                    m = GaugeMetricFamily(metric['name'], '', labels=['zone'])
+                    m.add_metric([name], int(zone_config[metric['index']]))
 
-            metrics = ['expiration', 'refresh']
-
-            for metric in metrics:
-
-                seconds = KnotCollector.convert_state_time(info[metric])
-                if seconds == None:
-                    continue
-
-                m = GaugeMetricFamily('knot_zone_stats_' + metric, '', labels=['zone'])
-                m.add_metric([zone], seconds)
-
-                yield m
-
-        # zone configuration metrics
-        ctl.send_block(cmd="zone-read", rtype="SOA")
-        zones = ctl.receive_block()
-
-        for name, params in zones.items():
-
-            metrics = [
-                {"name": "knot_zone_refresh",    "index": 3},
-                {"name": "knot_zone_retry",      "index": 4},
-                {"name": "knot_zone_expiration", "index": 5},
-            ]
-
-            zone_config = params[name]['SOA']['data'][0].split(" ")
-
-            for metric in metrics:
-
-                m = GaugeMetricFamily(metric['name'], '', labels=['zone'])
-                m.add_metric([name], int(zone_config[metric['index']]))
-
-                yield m
+                    yield m
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -178,12 +189,47 @@ if __name__ == '__main__':
         help="timeout for Knot control socket operations."
     )
 
+    parser.add_argument(
+        "--no-meminfo",
+        action='store_false',
+        help="disable collection of memory usage"
+    )
+
+    parser.add_argument(
+        "--no-global-stats",
+        action='store_false',
+        help="disable collection of global statistics"
+    )
+
+    parser.add_argument(
+        "--no-zone-stats",
+        action='store_false',
+        help="disable collection of zone statistics"
+    )
+
+    parser.add_argument(
+        "--no-zone-status",
+        action='store_false',
+        help="disable collection of zone status"
+    )
+
+    parser.add_argument(
+        "--no-zone-timers",
+        action='store_false',
+        help="disable collection of zone timer settings"
+    )
+
     args = parser.parse_args()
 
     REGISTRY.register(KnotCollector(
         args.knot_library_path,
         args.knot_socket_path,
         args.knot_socket_timeout,
+        args.no_meminfo,
+        args.no_global_stats,
+        args.no_zone_stats,
+        args.no_zone_status,
+        args.no_zone_read,
     ))
 
     httpd = http.server.HTTPServer(
