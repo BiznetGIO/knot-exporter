@@ -1,0 +1,11 @@
+version: '3'
+services:
+  knot_exporter:
+    image: knot-exporter:0.1.0
+    environment:
+      - KNOT_EXPORTER_LIBRARY_PATH=/usr/lib64/libknot.so.11.0.0
+      - KNOT_EXPORTER_ADDR=0.0.0.0
+      - KNOT_EXPORTER_PORT=9100
+    volumes:
+      - /usr/lib64/:/usr/lib64/
+      - /var/run/knot/:/var/run/knot/:Z

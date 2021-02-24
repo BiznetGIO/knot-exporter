@@ -1,14 +1,33 @@
-#!/usr/bin/python3
+"""Libknot server control interface wrapper.
+
+Example:
+    import json
+    from libknot.control import *
+
+    ctl = KnotCtl()
+    ctl.connect("/var/run/knot/knot.sock")
+
+    try:
+        ctl.send_block(cmd="conf-begin")
+        resp = ctl.receive_block()
+
+        ctl.send_block(cmd="conf-set", section="zone", item="domain", data="test")
+        resp = ctl.receive_block()
+
+        ctl.send_block(cmd="conf-commit")
+        resp = ctl.receive_block()
+
+        ctl.send_block(cmd="conf-read", section="zone", item="domain")
+        resp = ctl.receive_block()
+        print(json.dumps(resp, indent=4))
+    finally:
+        ctl.send(KnotCtlType.END)
+        ctl.close()
+"""
 
 from ctypes import cdll, c_void_p, c_int, c_char_p, c_uint, byref
 from enum import IntEnum
-
-import argparse
-import http.server
-
-from prometheus_client.core import REGISTRY
-from prometheus_client.core import GaugeMetricFamily
-from prometheus_client.exposition import MetricsHandler
+from sys import platform
 
 CTL_ALLOC = None
 CTL_FREE = None
@@ -19,9 +38,12 @@ CTL_SEND = None
 CTL_RECEIVE = None
 CTL_ERROR = None
 
+
 def load_lib(path=None):
     """Loads the libknot library."""
 
+    if path is None:
+        path = "libknot.dylib" if platform == "darwin" else "libknot.so"
     LIB = cdll.LoadLibrary(path)
 
     global CTL_ALLOC
@@ -143,13 +165,13 @@ class KnotCtlData(object):
 
         self.data[index] = c_char_p(value.encode()) if value else c_char_p()
 
+
 class KnotCtl(object):
     """Libknot server control interface."""
 
-    def __init__(self, lib_path):
+    def __init__(self):
         if not CTL_ALLOC:
-            load_lib(path=lib_path)
-
+            load_lib()
         self.obj = CTL_ALLOC()
 
     def __del__(self):
@@ -168,7 +190,6 @@ class KnotCtl(object):
 
         @type path: str
         """
-
         ret = CTL_CONNECT(self.obj, path.encode())
         if ret != 0:
             err = CTL_ERROR(ret)
@@ -186,8 +207,7 @@ class KnotCtl(object):
         @type data: KnotCtlData
         """
 
-        ret = CTL_SEND(self.obj, data_type,
-                       data.data if data else c_char_p())
+        ret = CTL_SEND(self.obj, data_type, data.data if data else c_char_p())
         if ret != 0:
             err = CTL_ERROR(ret)
             raise KnotCtlError(err if isinstance(err, str) else err.decode())
@@ -200,16 +220,26 @@ class KnotCtl(object):
         """
 
         data_type = c_uint()
-        ret = CTL_RECEIVE(self.obj, byref(data_type),
-                          data.data if data else c_char_p())
+        ret = CTL_RECEIVE(self.obj, byref(data_type), data.data if data else c_char_p())
         if ret != 0:
             err = CTL_ERROR(ret)
             raise KnotCtlError(err if isinstance(err, str) else err.decode())
         return KnotCtlType(data_type.value)
 
-    def send_block(self, cmd, section=None, item=None, identifier=None, zone=None,
-                   owner=None, ttl=None, rtype=None, data=None, flags=None,
-                   filter=None):
+    def send_block(
+        self,
+        cmd,
+        section=None,
+        item=None,
+        identifier=None,
+        zone=None,
+        owner=None,
+        ttl=None,
+        rtype=None,
+        data=None,
+        flags=None,
+        filter=None,
+    ):
         """Sends a control query block.
 
         @type cmd: str
@@ -236,7 +266,6 @@ class KnotCtl(object):
         query[KnotCtlDataIdx.DATA] = data
         query[KnotCtlDataIdx.FLAGS] = flags
         query[KnotCtlDataIdx.FILTER] = filter
-
         self.send(KnotCtlType.DATA, query)
         self.send(KnotCtlType.BLOCK)
 
@@ -406,93 +435,3 @@ class KnotCtl(object):
             raise KnotCtlError(err_reply[KnotCtlDataIdx.ERROR], err_reply)
 
         return out
-
-class KnotCollector(object):
-    def __init__(self, lib, sock, ttl):
-        self._lib = lib
-        self._sock = sock
-        self._ttl = ttl
-
-    def collect(self):
-        ctl = KnotCtl(lib_path=self._lib)
-        ctl.connect(self._sock)
-        ctl.set_timeout(self._ttl)
-
-        # Get global metrics.
-        ctl.send_block(cmd="stats", flags="F")
-        global_stats = ctl.receive_stats()
-
-        for section, section_data in global_stats.items():
-            for item, item_data in section_data.items():
-                name = ('knot_' + section + '_' + item).replace('-', '_')
-                yield GaugeMetricFamily(name, '', value=item_data)
-
-        # Get zone metrics.
-        ctl.send_block(cmd="zone-stats", flags="F")
-        zone_stats = ctl.receive_stats()
-
-        if "zone" in zone_stats:
-            for zone, zone_data in zone_stats["zone"].items():
-                for section, section_data in zone_data.items():
-                    for item, item_data in section_data.items():
-                        for kind, kind_data in item_data.items():
-                            if kind_data == 0:
-                                continue
-
-                            name = ('knot_' + item).replace('-', '_')
-                            m = GaugeMetricFamily(name, '',
-                                    labels=['zone', 'section', 'type'])
-                            m.add_metric([zone, section, kind], kind_data)
-                            yield m
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        formatter_class = argparse.ArgumentDefaultsHelpFormatter,
-    )
-
-    parser.add_argument(
-        "--web-listen-addr",
-        default="127.0.0.1",
-        help="address on which to expose metrics."
-    )
-
-    parser.add_argument(
-        "--web-listen-port",
-        type=int,
-        default=9433,
-        help="port on which to expose metrics."
-    )
-
-    parser.add_argument(
-        "--knot-library-path",
-        default="libknot.so",
-        help="path to libknot."
-    )
-
-    parser.add_argument(
-        "--knot-socket-path",
-        default="/run/knot/knot.sock",
-        help="path to knot control socket."
-    )
-
-    parser.add_argument(
-        "--knot-socket-timeout",
-        type=int,
-        default=2000,
-        help="timeout for Knot control socket operations."
-    )
-
-    args = parser.parse_args()
-
-    REGISTRY.register(KnotCollector(
-        args.knot_library_path,
-        args.knot_socket_path,
-        args.knot_socket_timeout,
-    ))
-
-    httpd = http.server.HTTPServer(
-        (args.web_listen_addr, args.web_listen_port),
-        MetricsHandler,
-    )
-
-    httpd.serve_forever()
