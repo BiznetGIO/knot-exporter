@@ -8,6 +8,9 @@ WORKDIR /exporter
 COPY ./requirements.txt /exporter/requirements.txt
 RUN pip3 install -r /exporter/requirements.txt
 
+ARG BUILD_VERSION
+RUN echo "$BUILD_VERSION" > build-version.txt
+
 COPY . /exporter
 
 ENV PYTHONPATH '/exporter'
