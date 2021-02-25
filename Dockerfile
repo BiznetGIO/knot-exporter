@@ -11,4 +11,4 @@ RUN pip3 install -r /exporter/requirements.txt
 COPY . /exporter
 
 ENV PYTHONPATH '/exporter'
-CMD ["python3" , "exporter/main.py"]
+CMD ["gunicorn", "exporter.main:app",  "-b", ":9100"]
