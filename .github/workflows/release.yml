@@ -16,6 +16,14 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Prepare env
+        run: |
+          echo "BUILD_VERSION=${GITHUB_SHA::8}" >> $GITHUB_ENV
+
+      - name: Show env
+        run: |
+          echo "BUILD_VERSION is: ${{ env.BUILD_VERSION }}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
 
@@ -39,7 +47,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          build-args: BUILD_VERSION=$(git log -1 --format=%h)
+          build-args: |
+            BUILD_VERSION=${{ env.BUILD_VERSION }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.docker_meta.outputs.tags }}
           labels: ${{ steps.docker_meta.outputs.labels }}
