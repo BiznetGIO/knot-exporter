@@ -11,6 +11,13 @@ services:
       # Control socket timeout (in miliseconds).
       # Set to 0 for infinity.  Default is 2000
       - KNOT_EXPORTER_SOCKET_TIMEOUT=5000
+
+      # set the env below to enable/disable monitoring
+      - KNOT_EXPORTER_COLLECT_MEMINFO=false
+      # - KNOT_EXPORTER_COLLECT_GLOBAL_STATS
+      # - KNOT_EXPORTER_COLLECT_ZONE_STATS
+      # - KNOT_EXPORTER_COLLECT_ZONE_STATUS
+      # - KNOT_EXPORTER_COLLECT_ZONE_READ
     volumes:
       - /usr/lib64/:/usr/lib64/
       - /var/run/knot/:/var/run/knot/:z
