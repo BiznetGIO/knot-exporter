@@ -7,6 +7,10 @@ services:
       - '9100:9100'
     environment:
       - KNOT_EXPORTER_LIBRARY_PATH=/usr/lib64/libknot.so.11.0.0
+
+      # Control socket timeout (in miliseconds).
+      # Set to 0 for infinity.  Default is 2000
+      - KNOT_EXPORTER_SOCKET_TIMEOUT=5000
     volumes:
       - /usr/lib64/:/usr/lib64/
       - /var/run/knot/:/var/run/knot/:Z
