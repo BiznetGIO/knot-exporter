@@ -13,5 +13,5 @@ services:
       - KNOT_EXPORTER_SOCKET_TIMEOUT=5000
     volumes:
       - /usr/lib64/:/usr/lib64/
-      - /var/run/knot/:/var/run/knot/:Z
+      - /var/run/knot/:/var/run/knot/:z
     command: gunicorn exporter.main:app --bind :9100
