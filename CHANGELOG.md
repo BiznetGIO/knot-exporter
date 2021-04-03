@@ -2,7 +2,7 @@
 
 Unreleased changes. Release notes have not yet been written.
 
-# 0.1.4 (2021-03-11)
+# 0.1.7 (2021-03-11)
 
 Feature enhancements:
 
