@@ -26,7 +26,7 @@ Export Knot info to Prometheus
 
 Run as usual `docker` applications.
 
-See [docker-compose.yml.example](docker-compose.yml.example) for detailed options.
+See [docker-compose.example.yml](docker-compose.example.yml) for detailed options.
 
 Visit `http://localhost:9100/metrics` to view the metrics, and `/health` to check its status.
 
